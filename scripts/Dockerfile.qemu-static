@@ -1,0 +1,119 @@
+# Alpine-based static QEMU build
+# Based on approach from https://github.com/ziglang/qemu-static
+FROM alpine:3.22
+
+# Install build dependencies
+RUN apk update && apk add --no-cache \
+    make \
+    ninja \
+    perl \
+    python3 \
+    py3-pip \
+    gcc \
+    g++ \
+    libc-dev \
+    pkgconf \
+    linux-headers \
+    glib-dev \
+    glib-static \
+    zlib-dev \
+    zlib-static \
+    pcre2-dev \
+    pcre2-static \
+    pixman-dev \
+    pixman-static \
+    util-linux-dev \
+    util-linux-static \
+    libslirp-dev \
+    bash \
+    git \
+    wget \
+    xz \
+    flex \
+    bison
+
+# Install meson
+RUN pip3 install --break-system-packages meson
+
+# Build libslirp statically from source
+WORKDIR /tmp/libslirp
+RUN wget https://gitlab.freedesktop.org/slirp/libslirp/-/archive/v4.8.0/libslirp-v4.8.0.tar.gz && \
+    tar -xf libslirp-v4.8.0.tar.gz && \
+    cd libslirp-v4.8.0 && \
+    meson setup build \
+        --prefix=/usr \
+        --default-library=static \
+        --buildtype=release && \
+    ninja -C build && \
+    ninja -C build install && \
+    cd /tmp && rm -rf /tmp/libslirp
+
+# Set working directory
+WORKDIR /build
+
+# Build arguments
+ARG QEMU_VERSION=9.1.0
+ARG TARGETS=x86_64-softmmu
+
+# Download QEMU source
+RUN wget https://download.qemu.org/qemu-${QEMU_VERSION}.tar.xz && \
+    tar -xf qemu-${QEMU_VERSION}.tar.xz && \
+    rm qemu-${QEMU_VERSION}.tar.xz
+
+WORKDIR /build/qemu-${QEMU_VERSION}
+
+# Configure QEMU - minimal profile for system emulation
+# Note: This is for x86_64 system emulation, not user-mode
+RUN mkdir build && cd build && \
+    ../configure \
+    --prefix=/output \
+    --target-list=${TARGETS} \
+    --enable-kvm \
+    --disable-werror \
+    --static \
+    --disable-gtk \
+    --disable-sdl \
+    --disable-vnc \
+    --disable-opengl \
+    --disable-spice \
+    --disable-cocoa \
+    --disable-curses \
+    --disable-rbd \
+    --disable-glusterfs \
+    --disable-libiscsi \
+    --disable-libnfs \
+    --disable-vvfat \
+    --disable-vdi \
+    --disable-vhdx \
+    --disable-vmdk \
+    --disable-vpc \
+    --disable-cloop \
+    --disable-dmg \
+    --disable-qcow1 \
+    --disable-parallels \
+    --disable-usb-redir \
+    --disable-libusb \
+    --disable-smartcard \
+    --disable-tpm \
+    --disable-numa \
+    --disable-xen \
+    --disable-rdma \
+    --disable-alsa \
+    --disable-pa \
+    --disable-oss \
+    --disable-jack \
+    --disable-docs \
+    --disable-tools \
+    --disable-guest-agent
+
+# Build QEMU
+RUN cd build && make -j$(nproc)
+
+# Install to /output
+RUN cd build && make install
+
+# Strip binaries to reduce size
+RUN find /output -type f -executable -exec strip {} \; 2>/dev/null || true
+
+# The final output will be in /output
+CMD ["/bin/sh"]
