@@ -1,2 +1,22 @@
-build
+# Build artifacts
+build/
+*.tar.gz
+*.tar
+*.gz
+
+# IDE and editor files
 .idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Temporary files
+*.tmp
+*.log
+
+# Downloaded source archives (optional - uncomment to cache source downloads)
+# If you want to cache kernel/e2fsprogs sources between builds, comment these out
+# build/kernel-source/
+# build/e2fsprogs-source/

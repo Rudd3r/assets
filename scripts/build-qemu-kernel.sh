@@ -12,6 +12,7 @@
 #   -j, --jobs N                   Number of parallel jobs (default: nproc)
 #   -o, --output DIR               Output directory (default: ./build/kernel)
 #   -s, --source DIR               Source directory (default: ./build/kernel-source)
+#   -a, --arch ARCH                Architecture to build (amd64 or arm64) (default: amd64)
 #   --skip-install                 Skip installing dependencies
 #   --clean                        Clean build directory before building
 #   -h, --help                     Show this help message
@@ -27,6 +28,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 OUTPUT_DIR="${OUTPUT_DIR:-$REPO_ROOT/build/kernel}"
 SOURCE_DIR="${SOURCE_DIR:-$REPO_ROOT/build/kernel-source}"
+ARCH="${ARCH:-amd64}"
 SKIP_INSTALL=0
 CLEAN_BUILD=0
 
@@ -78,6 +80,10 @@ while [[ $# -gt 0 ]]; do
             SOURCE_DIR="$2"
             shift 2
             ;;
+        -a|--arch)
+            ARCH="$2"
+            shift 2
+            ;;
         --skip-install)
             SKIP_INSTALL=1
             shift
@@ -96,12 +102,40 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+# Validate architecture
+if [[ ! "$ARCH" =~ ^(amd64|arm64)$ ]]; then
+    log_error "Invalid architecture: $ARCH"
+    log_error "Valid options: amd64, arm64"
+    exit 1
+fi
+
 log_info "QEMU Kernel Build Script"
 log_info "========================="
 log_info "Kernel Version: $KERNEL_VERSION"
+log_info "Architecture: $ARCH"
 log_info "Parallel Jobs: $JOBS"
 log_info "Output Directory: $OUTPUT_DIR"
 log_info "Source Directory: $SOURCE_DIR"
+echo
+
+# Set architecture-specific variables
+case "$ARCH" in
+    amd64)
+        KERNEL_ARCH="x86_64"
+        KERNEL_IMAGE="arch/x86_64/boot/bzImage"
+        KERNEL_TARGET="bzImage"
+        CROSS_COMPILE=""
+        ;;
+    arm64)
+        KERNEL_ARCH="arm64"
+        KERNEL_IMAGE="arch/arm64/boot/Image"
+        KERNEL_TARGET="Image"
+        CROSS_COMPILE="aarch64-linux-gnu-"
+        ;;
+esac
+
+log_info "Kernel arch: $KERNEL_ARCH"
+log_info "Cross compile: ${CROSS_COMPILE:-native}"
 echo
 
 # Install build dependencies
@@ -138,6 +172,14 @@ install_dependencies() {
         dwarves \
         rsync \
         python3
+    
+    # Install cross-compilation tools for arm64 if needed
+    if [[ "$ARCH" == "arm64" ]]; then
+        log_info "Installing ARM64 cross-compilation tools..."
+        $SUDO apt-get install -y \
+            gcc-aarch64-linux-gnu \
+            binutils-aarch64-linux-gnu
+    fi
     
     log_success "Dependencies installed"
 }
@@ -177,7 +219,7 @@ download_kernel() {
     tar -xf "$kernel_tarball"
     
     log_success "Kernel source ready at $kernel_dir"
-    echo "$kernel _dir"
+    echo "$kernel_dir"
 }
 
 # Configure kernel for QEMU
@@ -188,8 +230,8 @@ configure_kernel() {
     
     cd "$kernel_dir"
     
-    # Start with a minimal x86_64 config
-    make defconfig
+    # Start with architecture-specific defconfig
+    make ARCH="$KERNEL_ARCH" CROSS_COMPILE="$CROSS_COMPILE" defconfig
     
     # Enable required features using scripts/config
     log_info "Enabling QEMU-specific features..."
@@ -295,7 +337,7 @@ configure_kernel() {
     
     # Update config with dependencies
     log_info "Resolving configuration dependencies..."
-    make olddefconfig
+    make ARCH="$KERNEL_ARCH" CROSS_COMPILE="$CROSS_COMPILE" olddefconfig
     
     log_success "Kernel configuration complete"
 }
@@ -309,7 +351,7 @@ build_kernel() {
     cd "$kernel_dir"
     
     # Build kernel and modules
-    make -j"$JOBS" bzImage modules
+    make ARCH="$KERNEL_ARCH" CROSS_COMPILE="$CROSS_COMPILE" -j"$JOBS" "$KERNEL_TARGET" modules
     
     log_success "Kernel build complete"
 }
@@ -325,10 +367,10 @@ install_kernel() {
     cd "$kernel_dir"
     
     # Copy kernel image
-    cp arch/x86_64/boot/bzImage "$OUTPUT_DIR/vmlinuz-${KERNEL_VERSION}"
+    cp "$KERNEL_IMAGE" "$OUTPUT_DIR/vmlinuz-${KERNEL_VERSION}"
     
     # Install modules
-    make INSTALL_MOD_PATH="$OUTPUT_DIR" modules_install
+    make ARCH="$KERNEL_ARCH" CROSS_COMPILE="$CROSS_COMPILE" INSTALL_MOD_PATH="$OUTPUT_DIR" modules_install
     
     # Copy config for reference
     cp .config "$OUTPUT_DIR/config-${KERNEL_VERSION}"
@@ -370,12 +412,17 @@ main() {
     log_success "Kernel build complete!"
     log_success "==========================="
     echo
+    log_info "Architecture: $ARCH ($KERNEL_ARCH)"
     log_info "Kernel image: $OUTPUT_DIR/vmlinuz"
     log_info "Kernel version: $KERNEL_VERSION"
     log_info "Modules: $OUTPUT_DIR/lib/modules/${KERNEL_VERSION}"
     echo
+    local qemu_cmd="qemu-system-x86_64"
+    if [[ "$ARCH" == "arm64" ]]; then
+        qemu_cmd="qemu-system-aarch64"
+    fi
     log_info "You can use this kernel with QEMU:"
-    log_info "  qemu-system-x86_64 -kernel $OUTPUT_DIR/vmlinuz -initrd <initrd> ..."
+    log_info "  $qemu_cmd -kernel $OUTPUT_DIR/vmlinuz -initrd <initrd> ..."
     echo
     log_info "To test the kernel with your sandbox:"
     log_info "  cd $REPO_ROOT"
